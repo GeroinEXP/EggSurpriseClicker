@@ -1,4 +1,5 @@
-![image](https://github.com/GeroinEXP/EggSurpriseClicker/assets/6027753/aa5b2aa9-62cd-4fed-a148-874e15ec9332)
+![image](https://github.com/GeroinEXP/EggSurpriseClicker/assets/6027753/d630be37-4e5e-40d5-ad9f-6d378b8a9adc)
+
 1. Выбираете нужное вам приложение
 2. Устанавливаете подходящие настройки
 3. Запускаете.
