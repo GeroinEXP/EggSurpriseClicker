@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext
+from tkinter import ttk, scrolledtext
 import win32gui
 import win32con
 import win32api
@@ -7,11 +7,9 @@ import time
 import threading
 import psutil
 from pynput import keyboard
-import subprocess
-import os
-import pywintypes
 import json
 import webbrowser
+import os
 
 class AutoClicker:
     def __init__(self, master):
@@ -27,6 +25,9 @@ class AutoClicker:
 
         self.config_file = "autoclicker_config.json"
         self.load_config()
+
+        # Флаг для корректного завершения потоков
+        self.should_stop = threading.Event()
 
         # Выбор приложения
         ttk.Label(master, text="Выберите приложение:").pack(pady=5)
@@ -62,14 +63,6 @@ class AutoClicker:
         self.steam_app_id_entry = ttk.Entry(master)
         self.steam_app_id_entry.insert(0, "3017120")
         self.steam_app_id_entry.pack(pady=5)
-
-        ttk.Label(master, text="Путь к Steam:").pack(pady=5)
-        self.steam_path_frame = ttk.Frame(master)
-        self.steam_path_frame.pack(pady=5, fill=tk.X, padx=5)
-        self.steam_path_entry = ttk.Entry(self.steam_path_frame)
-        self.steam_path_entry.pack(side=tk.LEFT, expand=True, fill=tk.X)
-        self.steam_path_button = ttk.Button(self.steam_path_frame, text="Обзор", command=self.browse_steam_path)
-        self.steam_path_button.pack(side=tk.RIGHT)
 
         self.relaunch_var = tk.BooleanVar()
         self.relaunch_checkbox = ttk.Checkbutton(master, text="Перезапускать игру", variable=self.relaunch_var)
@@ -118,54 +111,31 @@ class AutoClicker:
         interval = float(self.interval_entry.get())
 
         self.log(f"Запущен автокликер для {window_title}")
-        while self.is_running:
+        while not self.should_stop.is_set():
             if not self.game_running:
                 self.log("Игра не запущена. Ожидание...")
-                time.sleep(5)
+                self.should_stop.wait(timeout=5)
                 continue
 
             handle = self.get_window_handle(window_title)
             if not handle:
                 self.log(f"Окно {window_title} не найдено. Ожидание...")
-                time.sleep(5)
+                self.should_stop.wait(timeout=5)
                 continue
 
             try:
                 self.click(handle, x, y)
-                time.sleep(interval)
-            except pywintypes.error as e:
-                if e.winerror == 1400:  # Недопустимый дескриптор окна
-                    self.log(f"Окно {window_title} больше не доступно. Ожидание...")
-                    time.sleep(5)
-                else:
-                    self.log(f"Ошибка при клике: {e}")
-                    time.sleep(5)
+                self.should_stop.wait(timeout=interval)
+            except Exception as e:
+                self.log(f"Ошибка при клике: {e}")
+                self.should_stop.wait(timeout=5)
 
         self.log("Автокликер остановлен")
-
-    def toggle_clicker_and_monitor(self):
-        if self.is_running:
-            self.is_running = False
-            self.game_running = False
-            self.toggle_button.config(text=f"Запустить ({self.hotkey_entry.get()})")
-            self.log("Автокликер и мониторинг игры остановлены")
-            self.status_label.config(text="Статус: Остановлен")
-        else:
-            self.is_running = True
-            self.toggle_button.config(text=f"Остановить ({self.hotkey_entry.get()})")
-            self.clicker_thread = threading.Thread(target=self.auto_clicker)
-            self.clicker_thread.start()
-            self.log("Автокликер запущен")
-            if self.relaunch_var.get():
-                self.game_monitor_thread = threading.Thread(target=self.monitor_and_relaunch_game)
-                self.game_monitor_thread.start()
-                self.log("Мониторинг игры запущен")
-            self.status_label.config(text="Статус: Запущен")
 
     def monitor_and_relaunch_game(self):
         steam_app_id = self.steam_app_id_entry.get()
         self.log("Начало мониторинга игры")
-        while self.is_running:
+        while not self.should_stop.is_set():
             if not self.is_game_running(steam_app_id):
                 if self.game_running:
                     self.log(f"Игра (App ID: {steam_app_id}) закрылась. Попытка перезапуска.")
@@ -176,9 +146,31 @@ class AutoClicker:
             else:
                 if not self.game_running:
                     self.log(f"Игра (App ID: {steam_app_id}) успешно запущена.")
-                self.game_running = True
-            time.sleep(5)  # Проверяем каждые 5 секунд
+                    self.game_running = True
+                    self.master.after(0, lambda: self.status_label.config(text="Статус: Игра запущена, кликер работает"))
+            self.should_stop.wait(timeout=5)
         self.log("Мониторинг игры остановлен")
+
+    def toggle_clicker_and_monitor(self):
+        if self.is_running:
+            self.should_stop.set()
+            self.is_running = False
+            self.game_running = False
+            self.toggle_button.config(text=f"Запустить ({self.hotkey_entry.get()})")
+            self.log("Автокликер и мониторинг игры остановлены")
+            self.status_label.config(text="Статус: Остановлен")
+        else:
+            self.should_stop.clear()
+            self.is_running = True
+            self.toggle_button.config(text=f"Остановить ({self.hotkey_entry.get()})")
+            self.clicker_thread = threading.Thread(target=self.auto_clicker)
+            self.clicker_thread.start()
+            self.log("Автокликер запущен")
+            if self.relaunch_var.get():
+                self.game_monitor_thread = threading.Thread(target=self.monitor_and_relaunch_game)
+                self.game_monitor_thread.start()
+                self.log("Мониторинг игры запущен")
+            self.status_label.config(text="Статус: Запущен")
 
     def is_game_running(self, steam_app_id):
         for process in psutil.process_iter(['name', 'exe']):
@@ -194,23 +186,6 @@ class AutoClicker:
         self.log(f"Запуск игры через Steam URI (App ID: {steam_app_id})")
         webbrowser.open(f"steam://rungameid/{steam_app_id}")
         self.status_label.config(text=f"Статус: Запуск игры (App ID: {steam_app_id})")
-
-    def get_default_steam_path(self):
-        possible_paths = [
-            r"C:\Program Files (x86)\Steam\Steam.exe",
-            r"C:\Program Files\Steam\Steam.exe"
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                return path
-        return ""
-
-    def browse_steam_path(self):
-        filename = filedialog.askopenfilename(filetypes=[("Steam Executable", "steam.exe")])
-        if filename:
-            self.steam_path_entry.delete(0, tk.END)
-            self.steam_path_entry.insert(0, filename)
-            self.save_config()
 
     def on_press(self, key):
         if hasattr(key, 'char'):
@@ -229,11 +204,14 @@ class AutoClicker:
 
     def on_closing(self):
         self.log("Закрытие приложения...")
+        self.should_stop.set()
         self.is_running = False
+
         if self.clicker_thread:
-            self.clicker_thread.join()
+            self.clicker_thread.join(timeout=2)
         if self.game_monitor_thread:
-            self.game_monitor_thread.join()
+            self.game_monitor_thread.join(timeout=2)
+
         self.listener.stop()
         self.log("Все потоки остановлены")
         self.save_config()
@@ -247,20 +225,11 @@ class AutoClicker:
             self.config = {}
 
     def save_config(self):
-        self.config['steam_path'] = self.steam_path_entry.get()
         self.config['steam_app_id'] = self.steam_app_id_entry.get()
         with open(self.config_file, 'w') as f:
             json.dump(self.config, f)
 
     def fill_saved_data(self):
-        if 'steam_path' in self.config:
-            self.steam_path_entry.delete(0, tk.END)
-            self.steam_path_entry.insert(0, self.config['steam_path'])
-        else:
-            default_path = self.get_default_steam_path()
-            if default_path:
-                self.steam_path_entry.insert(0, default_path)
-
         if 'steam_app_id' in self.config:
             self.steam_app_id_entry.delete(0, tk.END)
             self.steam_app_id_entry.insert(0, self.config['steam_app_id'])
