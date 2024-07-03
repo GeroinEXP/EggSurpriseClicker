@@ -10,6 +10,7 @@ from pynput import keyboard
 import json
 import webbrowser
 import os
+import sys
 
 class AutoClicker:
     def __init__(self, master):
@@ -114,21 +115,25 @@ class AutoClicker:
         while not self.should_stop.is_set():
             if not self.game_running:
                 self.log("Игра не запущена. Ожидание...")
-                self.should_stop.wait(timeout=5)
+                if self.should_stop.wait(timeout=5):
+                    break
                 continue
 
             handle = self.get_window_handle(window_title)
             if not handle:
                 self.log(f"Окно {window_title} не найдено. Ожидание...")
-                self.should_stop.wait(timeout=5)
+                if self.should_stop.wait(timeout=5):
+                    break
                 continue
 
             try:
                 self.click(handle, x, y)
-                self.should_stop.wait(timeout=interval)
+                if self.should_stop.wait(timeout=interval):
+                    break
             except Exception as e:
                 self.log(f"Ошибка при клике: {e}")
-                self.should_stop.wait(timeout=5)
+                if self.should_stop.wait(timeout=5):
+                    break
 
         self.log("Автокликер остановлен")
 
@@ -148,29 +153,42 @@ class AutoClicker:
                     self.log(f"Игра (App ID: {steam_app_id}) успешно запущена.")
                     self.game_running = True
                     self.master.after(0, lambda: self.status_label.config(text="Статус: Игра запущена, кликер работает"))
-            self.should_stop.wait(timeout=5)
+            if self.should_stop.wait(timeout=5):
+                break
         self.log("Мониторинг игры остановлен")
 
     def toggle_clicker_and_monitor(self):
         if self.is_running:
-            self.should_stop.set()
-            self.is_running = False
-            self.game_running = False
-            self.toggle_button.config(text=f"Запустить ({self.hotkey_entry.get()})")
-            self.log("Автокликер и мониторинг игры остановлены")
-            self.status_label.config(text="Статус: Остановлен")
+            self.stop_clicker_and_monitor()
         else:
-            self.should_stop.clear()
-            self.is_running = True
-            self.toggle_button.config(text=f"Остановить ({self.hotkey_entry.get()})")
-            self.clicker_thread = threading.Thread(target=self.auto_clicker)
-            self.clicker_thread.start()
-            self.log("Автокликер запущен")
-            if self.relaunch_var.get():
-                self.game_monitor_thread = threading.Thread(target=self.monitor_and_relaunch_game)
-                self.game_monitor_thread.start()
-                self.log("Мониторинг игры запущен")
-            self.status_label.config(text="Статус: Запущен")
+            self.start_clicker_and_monitor()
+
+    def start_clicker_and_monitor(self):
+        self.should_stop.clear()
+        self.is_running = True
+        self.toggle_button.config(text=f"Остановить ({self.hotkey_entry.get()})")
+        self.clicker_thread = threading.Thread(target=self.auto_clicker)
+        self.clicker_thread.start()
+        self.log("Автокликер запущен")
+        if self.relaunch_var.get():
+            self.game_monitor_thread = threading.Thread(target=self.monitor_and_relaunch_game)
+            self.game_monitor_thread.start()
+            self.log("Мониторинг игры запущен")
+        self.status_label.config(text="Статус: Запущен")
+
+    def stop_clicker_and_monitor(self):
+        self.should_stop.set()
+        self.is_running = False
+        self.game_running = False
+        self.toggle_button.config(text=f"Запустить ({self.hotkey_entry.get()})")
+        self.log("Автокликер и мониторинг игры остановлены")
+        self.status_label.config(text="Статус: Остановлен")
+
+        # Ожидание завершения потоков
+        if self.clicker_thread and self.clicker_thread.is_alive():
+            self.clicker_thread.join(timeout=2)
+        if self.game_monitor_thread and self.game_monitor_thread.is_alive():
+            self.game_monitor_thread.join(timeout=2)
 
     def is_game_running(self, steam_app_id):
         for process in psutil.process_iter(['name', 'exe']):
@@ -204,18 +222,21 @@ class AutoClicker:
 
     def on_closing(self):
         self.log("Закрытие приложения...")
-        self.should_stop.set()
-        self.is_running = False
+        self.stop_clicker_and_monitor()
 
-        if self.clicker_thread:
-            self.clicker_thread.join(timeout=2)
-        if self.game_monitor_thread:
-            self.game_monitor_thread.join(timeout=2)
+        # Принудительное завершение потоков, если они все еще работают
+        if self.clicker_thread and self.clicker_thread.is_alive():
+            self.log("Принудительное завершение потока автокликера")
+            self.clicker_thread._stop()
+        if self.game_monitor_thread and self.game_monitor_thread.is_alive():
+            self.log("Принудительное завершение потока мониторинга игры")
+            self.game_monitor_thread._stop()
 
         self.listener.stop()
         self.log("Все потоки остановлены")
         self.save_config()
         self.master.destroy()
+        sys.exit(0)  # Принудительно завершаем все потоки и процесс
 
     def load_config(self):
         if os.path.exists(self.config_file):
